@@ -1,4 +1,4 @@
-module cube
+module github.com/christinavaneyssen/cube
 
 go 1.23
 

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"cube/manager"
-	"cube/node"
-	"cube/task"
-	"cube/worker"
 	"fmt"
+	"github.com/christinavaneyssen/cube/manager"
+	"github.com/christinavaneyssen/cube/node"
+	"github.com/christinavaneyssen/cube/task"
+	"github.com/christinavaneyssen/cube/worker"
 	"github.com/golang-collections/collections/queue"
 	"github.com/google/uuid"
 	"time"
