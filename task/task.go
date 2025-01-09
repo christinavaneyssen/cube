@@ -134,3 +134,29 @@ type Config struct {
 	// 	- "on-failure": restart the container only on non-zero exit code
 	RestartPolicy string
 }
+
+// Docker provides an interface to interact with the Docker daemon through the Docker API.
+type Docker struct {
+	// Client is the Docker client used to communicate with the Docker daemon
+	Client *client.Client
+
+	// Config holds both the initial task configuration and runtime information
+	// such as ContainerID once the task is running
+	Config Config
+}
+
+// DockerResult encapsulates the outcome of Docker operations
+// such as starting or stopping containers.
+type DockerResult struct {
+	// Error holds any error that occurred during the operation
+	Error error
+
+	// Action describes the operation performed (eg. "start" or "stop")
+	Action string
+
+	// ContainerId uniquely identifies the target container
+	ContainerId string
+
+	// Result contains additional operation-specific output
+	Result string
+}
