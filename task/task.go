@@ -4,8 +4,14 @@
 package task
 
 import (
+	"context"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
+	"io"
+	"log"
+	"os"
 	"time"
 )
 
@@ -154,9 +160,26 @@ type DockerResult struct {
 	// Action describes the operation performed (eg. "start" or "stop")
 	Action string
 
-	// ContainerId uniquely identifies the target container
-	ContainerId string
+	// ContainerID uniquely identifies the target container
+	ContainerID string
 
 	// Result contains additional operation-specific output
 	Result string
+}
+
+func (d *Docker) Run() DockerResult {
+	ctx := context.Background()
+	reader, err := d.Client.ImagePull(
+		ctx, d.Config.Image, types.ImagePullOptions{})
+	if err != nil {
+		log.Printf("Failed to pull image %s: %v\n", d.Config.Image, err)
+		return DockerResult{Error: err}
+	}
+	io.Copy(os.Stdout, reader)
+	return DockerResult{
+		Error:       nil,
+		Action:      "",
+		ContainerID: "",
+		Result:      "",
+	}
 }
