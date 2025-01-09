@@ -53,7 +53,7 @@ func main() {
 	fmt.Printf("manager: %v\n", m)
 	m.SelectWorker()
 	m.UpdateTasks()
-	m.SendTask()
+	m.SendWork()
 
 	n := node.Node{
 		Name:   "first-node",
