@@ -67,8 +67,8 @@ func Example_fullTaskConfig() {
 		AttachStdin:  false,
 		AttachStdout: true,
 		AttachStderr: true,
-		ExposedPorts: nat.PortMap{
-			"6379/tcp": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: "6379"}},
+		ExposedPorts: nat.PortSet{
+			"6379/tcp": struct{}{},
 		},
 		Cmd:           []string{"redis-server"},
 		Image:         "redis:latest",
