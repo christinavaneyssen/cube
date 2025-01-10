@@ -5,12 +5,15 @@ package task
 
 import (
 	"context"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 	"io"
 	"log"
+	"math"
 	"os"
 	"time"
 )
@@ -110,7 +113,7 @@ type Config struct {
 	AttachStderr bool
 
 	// ExposedPorts defines the network ports to expose from the container
-	ExposedPorts nat.PortMap
+	ExposedPorts nat.PortSet
 
 	// Cmd specifies the command to run in the container
 	Cmd []string
@@ -133,12 +136,7 @@ type Config struct {
 	Env []string
 
 	// RestartPolicy defines the container's restart behaviour on exit
-	// Valid values are:
-	// 	- "" (empty string): no restart
-	// 	- "always": restart the container any time it stops
-	// - "unless-stopped": restart the container unless explicitly stopped
-	// 	- "on-failure": restart the container only on non-zero exit code
-	RestartPolicy string
+	RestartPolicy container.RestartPolicyMode
 }
 
 // Docker provides an interface to interact with the Docker daemon through the Docker API.
@@ -149,6 +147,8 @@ type Docker struct {
 	// Config holds both the initial task configuration and runtime information
 	// such as ContainerID once the task is running
 	Config Config
+
+	ContainerID string
 }
 
 // DockerResult encapsulates the outcome of Docker operations
@@ -168,18 +168,67 @@ type DockerResult struct {
 }
 
 func (d *Docker) Run() DockerResult {
+	log.Printf("Attempting to start container")
 	ctx := context.Background()
+
 	reader, err := d.Client.ImagePull(
-		ctx, d.Config.Image, types.ImagePullOptions{})
+		ctx, d.Config.Image, image.PullOptions{})
 	if err != nil {
 		log.Printf("Failed to pull image %s: %v\n", d.Config.Image, err)
 		return DockerResult{Error: err}
 	}
 	io.Copy(os.Stdout, reader)
+	rp := container.RestartPolicy{
+		Name: d.Config.RestartPolicy,
+	}
+
+	r := container.Resources{
+		Memory:   d.Config.Memory,
+		NanoCPUs: int64(d.Config.Cpu * math.Pow(10, 9)),
+	}
+
+	cc := container.Config{
+		Image:        d.Config.Image,
+		Tty:          false,
+		Env:          d.Config.Env,
+		ExposedPorts: d.Config.ExposedPorts,
+	}
+
+	hc := container.HostConfig{
+		RestartPolicy:   rp,
+		Resources:       r,
+		PublishAllPorts: true,
+	}
+
+	resp, err := d.Client.ContainerCreate(ctx, &cc, &hc, nil, nil, d.Config.Name)
+	if err != nil {
+		log.Printf("Error creating container using image: %s: %v\n", d.Config.Image, err)
+		return DockerResult{Error: err}
+	}
+
+	err = d.Client.ContainerStart(ctx, resp.ID, container.StartOptions{})
+	if err != nil {
+		log.Printf("Error starting container: %s: %v\n", resp.ID, err)
+		return DockerResult{Error: err}
+	}
+
+	d.ContainerID = resp.ID
+
+	out, err := d.Client.ContainerLogs(
+		ctx,
+		resp.ID,
+		container.LogsOptions{ShowStdout: true, ShowStderr: true},
+	)
+	if err != nil {
+		log.Printf("Error getting logs for container %s: %v\n", resp.ID, err)
+		return DockerResult{Error: err}
+	}
+
+	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
 	return DockerResult{
 		Error:       nil,
-		Action:      "",
-		ContainerID: "",
-		Result:      "",
+		Action:      "start",
+		ContainerID: resp.ID,
+		Result:      "success",
 	}
 }
