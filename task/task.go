@@ -5,6 +5,7 @@ package task
 
 import (
 	"context"
+	"fmt"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
@@ -14,7 +15,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"os"
 	"time"
 )
 
@@ -139,6 +139,18 @@ type Config struct {
 	RestartPolicy container.RestartPolicyMode
 }
 
+type DockerRunner interface {
+	Run() DockerResult
+	ImagePull(ctx context.Context) error
+	CreateContainer(ctx context.Context) error
+	StartContainer(ctx context.Context) error
+	ContainerLogs(ctx context.Context) error
+}
+
+type Logger interface {
+	Printf(format string, args ...interface{})
+}
+
 // Docker provides an interface to interact with the Docker daemon through the Docker API.
 type Docker struct {
 	// Client is the Docker client used to communicate with the Docker daemon
@@ -149,6 +161,10 @@ type Docker struct {
 	Config Config
 
 	ContainerID string
+
+	Logger Logger
+	Writer io.Writer
+	StdErr io.Writer
 }
 
 // DockerResult encapsulates the outcome of Docker operations
@@ -167,68 +183,96 @@ type DockerResult struct {
 	Result string
 }
 
-func (d *Docker) Run() DockerResult {
-	log.Printf("Attempting to start container")
-	ctx := context.Background()
-
-	reader, err := d.Client.ImagePull(
-		ctx, d.Config.Image, image.PullOptions{})
+func (d *Docker) ImagePull(ctx context.Context) error {
+	d.Logger.Printf("Pulling image %s", d.Config.Image)
+	reader, err := d.Client.ImagePull(ctx, d.Config.Image, image.PullOptions{})
 	if err != nil {
-		log.Printf("Failed to pull image %s: %v\n", d.Config.Image, err)
-		return DockerResult{Error: err}
+		return fmt.Errorf("image pull failed: %w", err)
 	}
-	io.Copy(os.Stdout, reader)
-	rp := container.RestartPolicy{
-		Name: d.Config.RestartPolicy,
-	}
+	defer reader.Close()
 
-	r := container.Resources{
-		Memory:   d.Config.Memory,
-		NanoCPUs: int64(d.Config.Cpu * math.Pow(10, 9)),
-	}
+	_, err = io.Copy(d.Writer, reader)
+	return err
+}
 
-	cc := container.Config{
+func (d *Docker) buildContainerConfig() *container.Config {
+	return &container.Config{
 		Image:        d.Config.Image,
 		Tty:          false,
 		Env:          d.Config.Env,
 		ExposedPorts: d.Config.ExposedPorts,
 	}
+}
 
-	hc := container.HostConfig{
-		RestartPolicy:   rp,
-		Resources:       r,
+func (d *Docker) buildHostConfig() *container.HostConfig {
+	return &container.HostConfig{
+		RestartPolicy: container.RestartPolicy{
+			Name: d.Config.RestartPolicy,
+		},
+		Resources: container.Resources{
+			Memory:   d.Config.Memory,
+			NanoCPUs: int64(d.Config.Cpu * math.Pow(10, 9)),
+		},
 		PublishAllPorts: true,
 	}
+}
 
-	resp, err := d.Client.ContainerCreate(ctx, &cc, &hc, nil, nil, d.Config.Name)
+func (d *Docker) ContainerCreate(ctx context.Context) (string, error) {
+	config := d.buildContainerConfig()
+	hostConfig := d.buildHostConfig()
+
+	resp, err := d.Client.ContainerCreate(ctx, config, hostConfig, nil, nil, d.Config.Name)
 	if err != nil {
-		log.Printf("Error creating container using image: %s: %v\n", d.Config.Image, err)
-		return DockerResult{Error: err}
+		return "", fmt.Errorf("create container failed: %w", err)
+	}
+	return resp.ID, nil
+}
+
+func (d *Docker) ContainerStart(ctx context.Context, containerID string) error {
+	d.Logger.Printf("Starting container %s", containerID)
+	err := d.Client.ContainerStart(ctx, containerID, container.StartOptions{})
+	if err != nil {
+		return fmt.Errorf("start container failed: %w", err)
 	}
 
-	err = d.Client.ContainerStart(ctx, resp.ID, container.StartOptions{})
+	d.ContainerID = containerID
+	return nil
+}
+
+func (d *Docker) ContainerLogs(ctx context.Context, containerID string) error {
+	logs, err := d.Client.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+	})
 	if err != nil {
-		log.Printf("Error starting container: %s: %v\n", resp.ID, err)
-		return DockerResult{Error: err}
+		return fmt.Errorf("failed to get container logs: %w", err)
+	}
+	defer logs.Close()
+
+	_, err = stdcopy.StdCopy(d.Writer, d.StdErr, logs)
+	return err
+}
+
+func (d *Docker) Run() DockerResult {
+	log.Printf("Attempting to start container")
+	ctx := context.Background()
+
+	if err := d.ImagePull(ctx); err != nil {
+		return DockerResult{Error: fmt.Errorf("failed to pull image: %w", err)}
 	}
 
-	d.ContainerID = resp.ID
-
-	out, err := d.Client.ContainerLogs(
-		ctx,
-		resp.ID,
-		container.LogsOptions{ShowStdout: true, ShowStderr: true},
-	)
+	containerID, err := d.ContainerCreate(ctx)
 	if err != nil {
-		log.Printf("Error getting logs for container %s: %v\n", resp.ID, err)
-		return DockerResult{Error: err}
+		return DockerResult{Error: fmt.Errorf("failed to create container: %w", err)}
 	}
 
-	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
+	if err := d.ContainerStart(ctx, containerID); err != nil {
+		return DockerResult{Error: fmt.Errorf("failed to start container: %w", err)}
+	}
+
 	return DockerResult{
-		Error:       nil,
 		Action:      "start",
-		ContainerID: resp.ID,
+		ContainerID: containerID,
 		Result:      "success",
 	}
 }

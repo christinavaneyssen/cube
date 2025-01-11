@@ -1,8 +1,8 @@
 package worker
 
 import (
-	"cube/task"
 	"fmt"
+	"github.com/christinavaneyssen/cube/task"
 	"github.com/golang-collections/collections/queue"
 	"github.com/google/uuid"
 )
